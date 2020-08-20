@@ -1,0 +1,186 @@
+---
+geometry: margin = 0.5in
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+fontsize: 12pt
+---
+
+# Appendix
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(lubridate)
+library(xts)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+library(readr)
+library(fpp2)
+library(tseries)
+library(zoo)
+library(TSstudio)
+library(gridExtra)
+```
+
+## Data summary
+
+```{r, echo = FALSE, include = TRUE, warning=FALSE}
+#Reading the data training dataset on which we will eventually build the model
+library(dplyr)
+sales_data = read.csv("sales_train.csv")
+str(sales_data)
+#changing date coulmn into the correct format
+sales_data$date = as.Date(sales_data$date, "%d.%m.%Y")
+sales_data$year= year(sales_data$date)
+sales_data$year= as.factor(sales_data$year)
+sales_data$month= month(sales_data$date)
+sales_data$month= as.factor(sales_data$month)
+sales_data$day= day(sales_data$date)
+sales_data$day= as.factor(sales_data$day)
+sum(is.na(sales_data))
+summary(sales_data)
+```
+
+```{r,echo=FALSE, include = FALSE, warning=FALSE, fig.height = 6, fig.width = 9}
+#Yearly total Sales
+yearly_salesdata <- sales_data %>% group_by(year)%>%
+  summarise(Yearly_sales = sum(item_cnt_day))
+
+ggplot(yearly_salesdata, aes(x = year, y = Yearly_sales, fill =  year)) + geom_bar(stat="identity") +
+labs(title = "Yearly Sales Data", x = "Year", y = "Total Item Sold" ) + theme_bw()
+
+#Monthly Sales of the Items
+monthly_salesdata <- sales_data %>% group_by(month)%>%
+  summarise(total_item_sales = sum(item_cnt_day))
+
+ggplot(monthly_salesdata, aes(x = month, y = total_item_sales, fill =  month)) + geom_bar(stat="identity") +
+labs(title = "Monthly Sales Data", x = "Month", y = "Total Item Sold" ) + theme_bw() + theme(legend.position = "none")
+```
+
+```{r,echo= FALSE, include =  FALSE, warning=FALSE, fig.height = 6, fig.width = 9}
+#year-month sales data
+sales_data %>%
+group_by(year, month) %>%
+summarise(Total_Sale = sum(item_cnt_day)) %>%
+ggplot(aes(x = factor(month), y = Total_Sale, group = 1)) + geom_line() + facet_wrap(~factor(year))+labs(x = "Month", y = "Total Item Sold") +theme_bw() + theme(legend.position = "none")
+```
+
+## Group by month sales
+
+```{r,echo= FALSE, include = TRUE, warning=FALSE}
+by_month<- group_by(sales_data,year, month)
+summarise(by_month, total_sales_month = sum(item_cnt_day))
+by_month
+```
+
+## Summary of ts object data
+
+```{r echo=FALSE, include=TRUE}
+#Time series start 
+sales<- sales_data %>% transmute(Date = as.Date(date, "%d.%m.%Y"), ShopNumber = as.factor(shop_id), item_value = item_price, items_sold_day = item_cnt_day)
+sales_monthly <- as.xts(sales[-(c(1,2))], order.by = sales$Date)
+sales_monthly_xts <-apply.monthly(sales_monthly$items_sold_day,sum)
+sales_monthly_ts <- xts_to_ts(sales_monthly_xts)
+sales_monthly_ts
+```
+
+## Scatterplot for lag
+
+```{r echo=FALSE, include=TRUE, warning=FALSE, fig.height = 5, fig.width = 5, fig.align='center'}
+gglagplot(sales_monthly_ts)
+```
+
+## Dicky-Fuller test
+
+```{r echo=FALSE, include=TRUE, warning=FALSE, fig.height = 6, fig.width = 9} 
+#Stationary check 
+#Dickey-fuller test (lag = 12 for month data)
+adf.test(sales_monthly_ts, k=12)
+#Result from ADF test shows p > 0 -> data is not stationary (show seasonal effects, trends, and other structures that depend on the time index)
+```
+
+## Seasonal naive output
+
+```{r echo=FALSE, include=TRUE, warning=FALSE, fig.height = 6, fig.width = 9}
+#basic model snaive
+changeofitemsales <-diff(log(sales_monthly_ts))
+snaivemodel <-snaive(changeofitemsales)
+summary(snaivemodel)
+checkresiduals(snaivemodel)
+```
+
+## ACF and PACF for ARIMA
+
+```{r echo=FALSE, include=TRUE, warning=FALSE}
+#For this purpose we have applied **log** function to remove unequal variances and **diff** function to get constant mean.
+monthly_stationary <- diff(log(sales_monthly_ts))
+##autoplot(monthly_stationary) +ggtitle("Timeplot:Stationary Item Sales Data from 2013 to 2015")
+#Arima Model , we need p, q value
+#ACF check
+
+Acf(monthly_stationary)
+#q=0
+
+pacf(monthly_stationary)
+#p=0
+```
+
+## ARIMA (0,0,0)
+
+```{r echo=FALSE, include=TRUE, warning=FALSE}
+arimamodel <- arima(monthly_stationary, c(0, 0,0),seasonal = list(order = c(0,0,0), period = 12))
+summary(arimamodel)
+checkresiduals(arimamodel)
+##AIC =-19.1 < AIC from auto.arima.
+sd_arima<- sqrt(0.02908)
+sd_arima
+```
+
+## ARIMA (0,1,0)
+
+```{r echo=FALSE, include=TRUE, warning=FALSE}
+#use autoarima
+autoarima <- auto.arima(log(sales_monthly_ts))
+summary(autoarima)
+checkresiduals(autoarima)
+sdautoarima <-sqrt(0.01023)
+sdautoarima
+#AIC=-34.81
+```
+
+## ARIMA (0,1,0) fitting
+
+```{r echo=FALSE, include=TRUE, warning=FALSE}
+testdata<-ts(sales_monthly_ts, frequency = 12, start=c(2013,1), end=c(2014,12))
+autoarima_fittest <- auto.arima(log(testdata))
+fittest_predicted_values<-predict(autoarima_fittest, n.ahead =2*12)
+fittest_converted_values<-2.718^fittest_predicted_values$pred
+testdata
+round(fittest_converted_values)
+```
+
+## Forecasting
+
+```{r echo=FALSE, include=TRUE, warning=FALSE, fig.height = 4, fig.width=9, fig.align='center', results='hide',message=FALSE}
+#use autoarima
+#autoarima <- auto.arima(log(sales_monthly_ts))
+checkresiduals(autoarima)
+#sdautoarima <-sqrt(0.01023)
+#sdautoarima
+#AIC=-34.81
+```
+
+## Reference
+
+[1] Coursera (2018). Predict Future Sales. Retrieved April 10, 2020 from https://www.kaggle.com/c/competitive-data-science-predict-future-sales/data.
+
+[2] Brownlee, J. (2016). How to Check if Time Series Data is Stationary with Python. Retrieved April 10, 2020 from https://machinelearningmastery.com/time-series-data-stationary-python
+
+[3] Schneider, O. (2020). Seminar 27: Time series, lecture notes, Statistical Methods for Data Analytics MSCI 718, University of Waterloo, delivered in Mar 2020.
+
+[4] Rob J Hyndman and George Athanasopoulos (2018). Forecasting principles and practice. Retrieved April 11, 2020 from https://otexts.com/fpp2.
